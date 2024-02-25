@@ -87,7 +87,7 @@ def convert_rwkv_checkpoint_to_hf_format(
     local_model_file=None, size=None, 
     tokenizer_file=None, push_to_hub=False, 
     model_name=None, is_world_tokenizer=False, 
-    model_version="5_2",
+    model_version="5_2", max_shard_size="20GB"
 ):
     # 1. If possible, build the tokenizer.
     if tokenizer_file is None:
@@ -129,7 +129,7 @@ def convert_rwkv_checkpoint_to_hf_format(
     state_dict = convert_state_dict(state_dict)
 
     # 4. Split in shards and save
-    shards, index = shard_checkpoint(state_dict)
+    shards, index = shard_checkpoint(state_dict, max_shard_size=max_shard_size )
     for shard_file, shard in shards.items():
         torch.save(shard, os.path.join(output_dir, shard_file))
 
@@ -177,6 +177,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--local_model_file", default=None, type=str, required=False, help="Path of the model file to convert."
     )
+
+    ## Increased the max_shard_size to 20GB, this helps account for a very specific bug in which
+    ##
+    ## lm-eval framework + accelerate is unable to properly load RWKV shareded models
+    ## https://github.com/RWKV/lm-evaluation-harness/issues/1
+    ##
+    ## This is expected to be fixed "in the future"
+    parser.add_argument(
+        "--max_shard_size", default="20GB", type=str, required=False, help="Size of individual shards, to split large models into" 
+    )
     parser.add_argument(
         "--output_dir", default=None, type=str, required=True, help="Where to save the converted model."
     )
@@ -214,6 +224,7 @@ if __name__ == "__main__":
         repo_id=args.repo_id,
         checkpoint_file=args.checkpoint_file,
         local_model_file=args.local_model_file,
+        max_shard_size=args.max_shard_size,
         size=args.size,
         tokenizer_file=args.tokenizer_file,
         push_to_hub=args.push_to_hub,
