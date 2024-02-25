@@ -82,7 +82,12 @@ def convert_state_dict(state_dict):
 
 
 def convert_rwkv_checkpoint_to_hf_format(
-    repo_id, checkpoint_file, output_dir, size=None, tokenizer_file=None, push_to_hub=False, model_name=None, is_world_tokenizer=False, model_version="5_2",
+    output_dir=None, 
+    repo_id=None, checkpoint_file=None, 
+    local_model_file=None, size=None, 
+    tokenizer_file=None, push_to_hub=False, 
+    model_name=None, is_world_tokenizer=False, 
+    model_version="5_2", max_shard_size="20GB"
 ):
     # 1. If possible, build the tokenizer.
     if tokenizer_file is None:
@@ -119,12 +124,12 @@ def convert_rwkv_checkpoint_to_hf_format(
     config.save_pretrained(output_dir)
 
     # 3. Download model file then convert state_dict
-    model_file = hf_hub_download(repo_id, checkpoint_file)
-    state_dict = torch.load(model_file, map_location="cpu")
+    local_model_file = local_model_file or hf_hub_download(repo_id, checkpoint_file)
+    state_dict = torch.load(local_model_file, map_location="cpu")
     state_dict = convert_state_dict(state_dict)
 
     # 4. Split in shards and save
-    shards, index = shard_checkpoint(state_dict)
+    shards, index = shard_checkpoint(state_dict, max_shard_size=max_shard_size )
     for shard_file, shard in shards.items():
         torch.save(shard, os.path.join(output_dir, shard_file))
 
@@ -164,10 +169,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # Required parameters
     parser.add_argument(
-        "--repo_id", default=None, type=str, required=True, help="Repo ID from which to pull the checkpoint."
+        "--repo_id", default=None, type=str, required=False, help="Repo ID from which to pull the checkpoint."
     )
     parser.add_argument(
-        "--checkpoint_file", default=None, type=str, required=True, help="Name of the checkpoint file in the repo."
+        "--checkpoint_file", default=None, type=str, required=False, help="Name of the checkpoint file in the repo."
+    )
+    parser.add_argument(
+        "--local_model_file", default=None, type=str, required=False, help="Path of the model file to convert."
+    )
+
+    ## Increased the max_shard_size to 20GB, this helps account for a very specific bug in which
+    ##
+    ## lm-eval framework + accelerate is unable to properly load RWKV shareded models
+    ## https://github.com/RWKV/lm-evaluation-harness/issues/1
+    ##
+    ## This is expected to be fixed "in the future"
+    parser.add_argument(
+        "--max_shard_size", default="20GB", type=str, required=False, help="Size of individual shards, to split large models into" 
     )
     parser.add_argument(
         "--output_dir", default=None, type=str, required=True, help="Where to save the converted model."
@@ -182,7 +200,7 @@ if __name__ == "__main__":
         "--size",
         default=None,
         type=str,
-        help="Size of the model. Will be inferred from the `checkpoint_file` if not passed.",
+        help="Size of the model. Will be inferred from the `local_model_file/checkpoint_file` if not passed.",
     )
     parser.add_argument(
         "--push_to_hub",
@@ -196,15 +214,17 @@ if __name__ == "__main__":
         help="Name of the pushed model on the Hub, including the username / organization.",
     )
     parser.add_argument("--is_world_tokenizer",
-        default=False,
+        default=True,
         type=bool,
         help="use RWKV world series model tokenizer or normal tokenizer.")
 
     args = parser.parse_args()
     convert_rwkv_checkpoint_to_hf_format(
-        args.repo_id,
-        args.checkpoint_file,
-        args.output_dir,
+        output_dir=args.output_dir,
+        repo_id=args.repo_id,
+        checkpoint_file=args.checkpoint_file,
+        local_model_file=args.local_model_file,
+        max_shard_size=args.max_shard_size,
         size=args.size,
         tokenizer_file=args.tokenizer_file,
         push_to_hub=args.push_to_hub,
